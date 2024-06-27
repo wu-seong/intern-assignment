@@ -19,6 +19,12 @@
 #define MAX_CLIENTS 100
 #define EXPECTED_TYPE "PowerUP"
 
+#define LEAF_CERT_FILE "server_leaf.pem"
+#define KEY_FILE "server_leaf.key"
+#define ROOT_CA_FILE "server_rootca.pem"
+#define SUB_CA1_FILE "server_sub_ca1.pem"
+#define SUB_CA2_FILE "server_sub_ca2.pem"
+
 typedef struct {
     int socket;
     struct sockaddr_in address;
@@ -96,6 +102,37 @@ bool check_message_type(const char* message, char* expected_type){
     }
 }
 
+void wolfssl_init(){
+	 // Create and configure WOLFSSL_CTX
+    WOLFSSL_CTX *ctx = wolfSSL_CTX_new(wolfTLSv1_3_server_method());
+    if (ctx == NULL) {
+        error_handling("wolfSSL_CTX_new() error");
+    }
+
+    // Load server leaf certificate and key
+    if (wolfSSL_CTX_use_certificate_file(ctx, LEAF_CERT_FILE, SSL_FILETYPE_PEM) != SSL_SUCCESS) {
+        error_handling("wolfSSL_CTX_use_certificate_file() error");
+    }
+    if (wolfSSL_CTX_use_PrivateKey_file(ctx, KEY_FILE, SSL_FILETYPE_PEM) != SSL_SUCCESS) {
+        error_handling("wolfSSL_CTX_use_PrivateKey_file() error");
+    }
+
+    // Load intermediate and root CA certificates
+    if (wolfSSL_CTX_load_verify_locations(ctx, SUB_CA1_FILE, NULL) != SSL_SUCCESS) {
+        error_handling("wolfSSL_CTX_load_verify_locations() error");
+    }
+    if (wolfSSL_CTX_load_verify_locations(ctx, SUB_CA2_FILE, NULL) != SSL_SUCCESS) {
+        error_handling("wolfSSL_CTX_load_verify_locations() error");
+    }
+    if (wolfSSL_CTX_load_verify_locations(ctx, ROOT_CA_FILE, NULL) != SSL_SUCCESS) {
+        error_handling("wolfSSL_CTX_load_verify_locations() error");
+    }
+
+    // Set cipher suites
+    wolfSSL_CTX_set_cipher_list(ctx, "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
+
+
+}
 // 첫 연결 후 실행할 콜백 함수
 void* handle_client(void *arg){
 	client_t *client = (client_t *)arg;
