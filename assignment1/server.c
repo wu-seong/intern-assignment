@@ -19,15 +19,15 @@
 #define MAX_CLIENTS 100
 #define EXPECTED_TYPE "PowerUP"
 
-#define LEAF_CERT_FILE "server_leaf.pem"
-#define KEY_FILE "server_leaf.key"
-#define ROOT_CA_FILE "server_rootca.pem"
-#define SUB_CA1_FILE "server_sub_ca1.pem"
-#define SUB_CA2_FILE "server_sub_ca2.pem"
+#define CERT_CHAIN_FILE "./aslab_certificates/cert_chain.pem"
+#define KEY_FILE "./aslab_certificates/server_leaf.key"
+#define CA_FILE "./aslab_certificates/server_rootca.pem"
+
+
 
 typedef struct {
     int socket;
-    struct sockaddr_in address;
+    WOLFSSL* ssl;
 } client_t;
 
 
@@ -102,35 +102,30 @@ bool check_message_type(const char* message, char* expected_type){
     }
 }
 
-void wolfssl_init(){
+WOLFSSL_CTX* wolfssl_init(){
 	 // Create and configure WOLFSSL_CTX
-    WOLFSSL_CTX *ctx = wolfSSL_CTX_new(wolfTLSv1_3_server_method());
+    WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLSv1_3_server_method());
     if (ctx == NULL) {
-        error_handling("wolfSSL_CTX_new() error");
+        perror("wolfSSL_CTX_new() error");
     }
 
-    // Load server leaf certificate and key
-    if (wolfSSL_CTX_use_certificate_file(ctx, LEAF_CERT_FILE, SSL_FILETYPE_PEM) != SSL_SUCCESS) {
-        error_handling("wolfSSL_CTX_use_certificate_file() error");
+     // Load server certificate chain and key
+    if (wolfSSL_CTX_use_certificate_chain_file(ctx, CERT_CHAIN_FILE) != SSL_SUCCESS) {
+        perror("wolfSSL_CTX_use_certificate_chain_file() error");
     }
     if (wolfSSL_CTX_use_PrivateKey_file(ctx, KEY_FILE, SSL_FILETYPE_PEM) != SSL_SUCCESS) {
-        error_handling("wolfSSL_CTX_use_PrivateKey_file() error");
+        perror("wolfSSL_CTX_use_PrivateKey_file() error");
     }
 
-    // Load intermediate and root CA certificates
-    if (wolfSSL_CTX_load_verify_locations(ctx, SUB_CA1_FILE, NULL) != SSL_SUCCESS) {
-        error_handling("wolfSSL_CTX_load_verify_locations() error");
+	// Load root CA certificate for verifying client certificates
+    if (wolfSSL_CTX_load_verify_locations(ctx, CA_FILE, NULL) != SSL_SUCCESS) {
+        perror("wolfSSL_CTX_load_verify_locations() error");
     }
-    if (wolfSSL_CTX_load_verify_locations(ctx, SUB_CA2_FILE, NULL) != SSL_SUCCESS) {
-        error_handling("wolfSSL_CTX_load_verify_locations() error");
-    }
-    if (wolfSSL_CTX_load_verify_locations(ctx, ROOT_CA_FILE, NULL) != SSL_SUCCESS) {
-        error_handling("wolfSSL_CTX_load_verify_locations() error");
-    }
-
+	// Require client certificate
+    wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     // Set cipher suites
     wolfSSL_CTX_set_cipher_list(ctx, "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
-
+	return ctx;
 
 }
 // 첫 연결 후 실행할 콜백 함수
@@ -138,9 +133,14 @@ void* handle_client(void *arg){
 	client_t *client = (client_t *)arg;
 	char read_buffer[BUFFER_SIZE];
 
+
+	// Perform SSL handshake (blocking)
+    if (wolfSSL_accept(client->ssl) != SSL_SUCCESS) {
+        perror("wolfSSL_accept() error");
+    }
 	// 요청 메시지 읽기
 	//printf("recv wait...");
-	int read_bytes = recv(client->socket, &read_buffer, BUFFER_SIZE - 1, 0);
+	int read_bytes = wolfSSL_read(client->ssl, &read_buffer, BUFFER_SIZE - 1);
 	if (read_bytes > 0) {
     	read_buffer[read_bytes] = '\0'; 
         printf("Server Received: %s\n", read_buffer);
@@ -152,6 +152,7 @@ void* handle_client(void *arg){
 		// reason이 PowerUp이 아니라면 클라이언트와의 연결 종료 후 다시 클라이언트 연결 대기
 		if(!is_correct_reason){
 			cJSON_Delete(json);
+			wolfSSL_free(client->ssl);
 			close(client->socket);
 			free(arg);
 		}
@@ -162,41 +163,42 @@ void* handle_client(void *arg){
 		// response 만들어서 send
 		// currentTime(String), status(), inerval 정보 만들어서 JSON serialize
 		char* boot_notification_response = create_boot_notification_response();
-		if( write(client->socket, boot_notification_response, strlen(boot_notification_response) ) == -1 ){
+		if( wolfSSL_write(client->ssl, boot_notification_response, strlen(boot_notification_response) ) <= 0 ){
 			perror("write failed");
 		}
 		printf("Sent Message: %s\n", boot_notification_response);
 	}
-	else if(read_bytes == -1){
-		perror("recv failed");
-	}
 	else if(read_bytes == 0){
-		printf("client disconnected\n");
-		close(client->socket);
-		free(arg);
-		return NULL;
-	}
+			char errorString[80];
+    		int err = wolfSSL_get_error(client->ssl, 0);
+    		char* error_string = wolfSSL_ERR_error_string(err, errorString);
+			perror(error_string);
+			wolfSSL_free(client->ssl);
+			close(client->socket);
+			free(arg);
+		}
 
 	// Accept를 보낸 경우 heartbeatRequest 수신 대기
 	while(1){
 		memset(read_buffer, 0, BUFFER_SIZE);
-		read_bytes = recv(client->socket, &read_buffer, BUFFER_SIZE - 1, 0);
+		read_bytes = wolfSSL_read(client->ssl, &read_buffer, BUFFER_SIZE - 1);
 		read_buffer[read_bytes] = '\0';
 		printf("Recived Message: %s\n", read_buffer);
 		if(read_bytes > 0){
 			if(check_message_type(read_buffer, "HeartbeatRequest")){
 				char* heartbeat_response = create_hearbeat_response();
-				if(write(client->socket, heartbeat_response, strlen(heartbeat_response)) == -1){
+				if(wolfSSL_write(client->ssl, heartbeat_response, strlen(heartbeat_response)) <= 0){
 					perror("write failed");
 				}
 				printf("Sent Message: %s\n", heartbeat_response);
 			}
 		}
-		else if(read_bytes == -1){
-			perror("recv failed");
-		}
 		else if(read_bytes == 0){
-			printf("client disconnected\n");
+			char errorString[80];
+    		int err = wolfSSL_get_error(client->ssl, 0);
+    		char* error_string = wolfSSL_ERR_error_string(err, errorString);
+			perror(error_string);
+			wolfSSL_free(client->ssl);
 			close(client->socket);
 			free(arg);
 		}
@@ -208,6 +210,9 @@ pthread_mutex_t client_sockets_mutex = PTHREAD_MUTEX_INITIALIZER;
 client_t* client_sockets[MAX_CLIENTS] = {NULL};
 
 int main(){
+	WOLFSSL_CTX* ctx = wolfssl_init();
+	// Create and configure WOLFSSL object
+
 	int passive_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	
 	pthread_t t_id;
@@ -237,8 +242,15 @@ int main(){
 		printf("connect\n");
  		client_t *new_client = (client_t *)malloc(sizeof(client_t));
         new_client->socket = client_sock;
-        new_client->address = sin;
 
+		// 연결에 SSL 적용
+		WOLFSSL *ssl = wolfSSL_new(ctx);
+        new_client->ssl = ssl;
+		
+		wolfSSL_set_fd(new_client->ssl, new_client->socket);
+		if (ssl == NULL) {
+			perror("wolfSSL_new() error");
+		}
 		// 관리할 소켓 대상에 추가 및 스레드 생성
 		//printf("lock waiting...\n");
 		pthread_mutex_lock(&client_sockets_mutex);
@@ -248,6 +260,7 @@ int main(){
 				client_sockets[i] = new_client;
 				if(pthread_create(&t_id, NULL, handle_client, (void*)new_client) != 0){
 					perror("thread create failed");
+					wolfSSL_free(new_client->ssl);
 					close(new_client->socket);
 					free(new_client);
 					client_sockets[i] = NULL;
@@ -263,6 +276,8 @@ int main(){
 	
 
 	}
+	wolfSSL_CTX_free(ctx);
+    wolfSSL_Cleanup();
 	close(passive_sock);
 	return 0;
 }
