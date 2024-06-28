@@ -20,7 +20,7 @@
 #define EXPECTED_TYPE "PowerUP"
 
 #define CERT_CHAIN_FILE "./aslab_certificates/cert_chain.pem"
-#define KEY_FILE "./aslab_certificates/server_leaf.key"
+#define KEY_FILE "./aslab_certificates/server_leaf_private.pem"
 #define CA_FILE "./aslab_certificates/server_rootca.pem"
 
 
