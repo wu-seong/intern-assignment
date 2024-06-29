@@ -20,7 +20,7 @@
 
 #define CERT_CHAIN_FILE "./aslab_certificates/client_cert_chain.pem"
 #define KEY_FILE "./aslab_certificates/client_leaf_private.pem"
-#define CA_FILE "./aslab_certificates/client_rootca.pem"
+#define CA_FILE "./aslab_certificates/server_rootca.pem"
 
 void error_handling(const char *message) {
     perror(message);
@@ -121,6 +121,7 @@ int main() {
     struct sockaddr_in server_addr;
     char buffer[BUFFER_SIZE];
 
+
     sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == -1) {
         error_handling("socket() error");
@@ -131,23 +132,56 @@ int main() {
     server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
     server_addr.sin_port = htons(PORT);
 
+    // 연결에 SSL 적용
+    WOLFSSL_CTX* ctx = wolfssl_init();
+	WOLFSSL *ssl = wolfSSL_new(ctx);
+    wolfSSL_set_fd(ssl, sock);
+
     if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
         error_handling("connect() error");
     }
 
     char* boot_notification_request = create_boot_notification_request();
 
-    if (write(sock, boot_notification_request, strlen(boot_notification_request)) == -1) {
-        error_handling("write() error");
+    int ret = wolfSSL_write(ssl, boot_notification_request, strlen(boot_notification_request) );
+    if (ret > 0){
+        printf("Sent Message: %s\n", boot_notification_request);
+    }
+    else{
+        int err = wolfSSL_get_error(ssl, ret);
+
+        fprintf(stderr, "wolfSSL_write failed: %d\n", err);
+        switch (err) {
+        case SSL_ERROR_WANT_READ:
+            fprintf(stderr, "SSL_ERROR_WANT_READ: The operation did not complete; the same TLS/SSL I/O function should be called again later.\n");
+            break;
+        case SSL_ERROR_WANT_WRITE:
+            fprintf(stderr, "SSL_ERROR_WANT_WRITE: The operation did not complete; the same TLS/SSL I/O function should be called again later.\n");
+            break;
+        case SSL_ERROR_SYSCALL:
+            fprintf(stderr, "SSL_ERROR_SYSCALL: Some I/O error occurred. The OpenSSL error queue may contain more information on the error.\n");
+            break;
+        case SSL_ERROR_SSL:
+            fprintf(stderr, "SSL_ERROR_SSL: A failure in the SSL library occurred, usually a protocol error.\n");
+            break;
+        default:
+            fprintf(stderr, "Unknown error occurred.\n");
+            break;
+        }
+        perror("wolfSSL_write() error");
     }
 
-    printf("Sent Message: %s\n", boot_notification_request);
 
-    int str_len = read(sock, buffer, BUFFER_SIZE - 1);
-    if (str_len == -1) {
-        error_handling("read() error");
+    int read_bytes = wolfSSL_read(ssl, buffer, BUFFER_SIZE - 1);
+    if(read_bytes == 0){
+        char errorString[80];
+        int err = wolfSSL_get_error(ssl, 0);
+        char* error_string = wolfSSL_ERR_error_string(err, errorString);
+        perror(error_string);
+        wolfSSL_free(ssl);
+        close(sock);
     }
-    buffer[str_len] = '\0';
+    buffer[read_bytes] = '\0';
     printf("Received Message: %s\n", buffer);
     cJSON *json_boot_notification_response = cJSON_Parse(buffer);
     if(json_boot_notification_response == NULL){
@@ -173,26 +207,23 @@ int main() {
             error_handling("setsockopt() error");
         }
 
-        if (write(sock, heartbeat_request, strlen(heartbeat_request)) == -1) {
-            error_handling("write() error");
-        }
+       if( wolfSSL_write(ssl, heartbeat_request, strlen(heartbeat_request) ) <= 0 ){
+		    perror("write failed");
+	    }
         printf("Sent Message: %s\n", heartbeat_request);
 
         free(heartbeat_request);
         memset(buffer, 0, BUFFER_SIZE);
-        int str_len = read(sock, buffer, BUFFER_SIZE - 1);
-        if (str_len == -1) { 
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                printf("No response from server within %d seconds, closing connection.\n", 5);
-                close(sock);
-                exit(EXIT_FAILURE);
-            } else {
-                error_handling("read() error");
-            }
-        } else if (str_len == 0) {
-            printf("Server closed the connection.\n");
+        int read_bytes = wolfSSL_read(ssl, buffer, BUFFER_SIZE - 1);
+        if(read_bytes == 0){
+			char errorString[80];
+    		int err = wolfSSL_get_error(ssl, 0);
+    		char* error_string = wolfSSL_ERR_error_string(err, errorString);
+			perror(error_string);
+			wolfSSL_free(ssl);
+			close(sock);
         } else {
-            buffer[str_len] = '\0';
+            buffer[read_bytes] = '\0';
             cJSON* json_heartbeaet_response = cJSON_Parse(buffer);
             printf("Received message: %s\n", buffer);
             printf("Server currentTime: %s\n", cJSON_GetObjectItemCaseSensitive(json_heartbeaet_response, "currentTime")->valuestring);
