@@ -21,7 +21,7 @@
 
 #define CERT_CHAIN_FILE "./aslab_certificates/cert_chain.pem"
 #define KEY_FILE "./aslab_certificates/server_leaf_private.pem"
-#define CA_FILE "./aslab_certificates/server_rootca.pem"
+#define CA_FILE "./aslab_certificates/client_rootca.pem"
 
 
 
@@ -122,7 +122,7 @@ WOLFSSL_CTX* wolfssl_init(){
         perror("wolfSSL_CTX_load_verify_locations() error");
     }
 	// Require client certificate
-    wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+    // wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     // Set cipher suites
     wolfSSL_CTX_set_cipher_list(ctx, "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
 	return ctx;
@@ -134,9 +134,13 @@ void* handle_client(void *arg){
 	char read_buffer[BUFFER_SIZE];
 
 
-	// Perform SSL handshake (blocking)
-    if (wolfSSL_accept(client->ssl) != SSL_SUCCESS) {
-        perror("wolfSSL_accept() error");
+	 if (wolfSSL_accept(client->ssl) != SSL_SUCCESS) {
+        int err = wolfSSL_get_error(client->ssl, 0);
+        fprintf(stderr, "wolfSSL_accept failed: %d\n", err);
+        wolfSSL_free(client->ssl);
+        close(client->socket);
+        free(client);
+        return NULL;
     }
 	// 요청 메시지 읽기
 	//printf("recv wait...");
