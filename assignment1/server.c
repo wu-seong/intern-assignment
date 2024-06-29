@@ -122,7 +122,7 @@ WOLFSSL_CTX* wolfssl_init(){
         perror("wolfSSL_CTX_load_verify_locations() error");
     }
 	// Require client certificate
-    // wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+    wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     // Set cipher suites
     wolfSSL_CTX_set_cipher_list(ctx, "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
 	return ctx;
@@ -201,10 +201,11 @@ void* handle_client(void *arg){
 			char errorString[80];
     		int err = wolfSSL_get_error(client->ssl, 0);
     		char* error_string = wolfSSL_ERR_error_string(err, errorString);
-			perror(error_string);
+			fprintf(stderr, "read failed: %s\n", error_string);
 			wolfSSL_free(client->ssl);
 			close(client->socket);
 			free(arg);
+			return NULL;
 		}
 	}
 	return NULL;
