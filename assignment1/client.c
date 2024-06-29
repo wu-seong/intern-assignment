@@ -9,11 +9,18 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <time.h>
+
 #include <cjson/cJSON.h>
+#include <wolfssl/options.h>
+#include <wolfssl/ssl.h>
 
 #define PORT 8080
 #define SERVER_IP "127.0.0.1"
 #define BUFFER_SIZE 1024
+
+#define CERT_CHAIN_FILE "./aslab_certificates/client_cert_chain.pem"
+#define KEY_FILE "./aslab_certificates/client_leaf_private.pem"
+#define CA_FILE "./aslab_certificates/client_rootca.pem"
 
 void error_handling(const char *message) {
     perror(message);
@@ -84,6 +91,31 @@ bool check_status(cJSON* status){
 	}
 }
 
+WOLFSSL_CTX* wolfssl_init(){
+	// Create and configure WOLFSSL_CTX
+    WOLFSSL_CTX* ctx = wolfSSL_CTX_new(wolfTLSv1_3_client_method());
+    if (ctx == NULL) {
+        perror("wolfSSL_CTX_new() error");
+    }
+
+     // Load server certificate chain and key
+    if (wolfSSL_CTX_use_certificate_chain_file(ctx, CERT_CHAIN_FILE) != SSL_SUCCESS) {
+        perror("wolfSSL_CTX_use_certificate_chain_file() error");
+    }
+    if (wolfSSL_CTX_use_PrivateKey_file(ctx, KEY_FILE, SSL_FILETYPE_PEM) != SSL_SUCCESS) {
+        perror("wolfSSL_CTX_use_PrivateKey_file() error");
+    }
+
+	// Load root CA certificate for verifying client certificates
+    if (wolfSSL_CTX_load_verify_locations(ctx, CA_FILE, NULL) != SSL_SUCCESS) {
+        perror("wolfSSL_CTX_load_verify_locations() error");
+    }
+    
+    // Set cipher suites
+    wolfSSL_CTX_set_cipher_list(ctx, "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
+	return ctx;
+
+}
 int main() {
     int sock;
     struct sockaddr_in server_addr;
